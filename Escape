@@ -1,0 +1,515 @@
+--[[
+    Оптимизированное ESP + AutoFarm меню для Roblox
+    - Сворачивание/разворачивание окна
+    - Drag'n'drop перемещение интерфейса
+    - Удаление старой GUI при повторном запуске
+    - Динамический ESP/AutoFarm через DescendantAdded/Removed и CharacterAdded/Removing
+    - Корректное удаление ESP/Billboard
+    - FPSCap
+    - Кнопка сброса счетчика "Собрано"
+    - Минимизация нагрузки
+    - Все опции из Config используются
+--]]
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local Mouse = LocalPlayer:GetMouse()
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local UserSettings = UserSettings()
+local gameSettings = UserSettings():GetService("UserGameSettings")
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+local Workspace = game:GetService("Workspace")
+
+-- Удаление старой GUI, если есть
+local oldGui = PlayerGui:FindFirstChild("ESP_Farm_GUI")
+if oldGui then oldGui:Destroy() end
+
+-- Конфиг
+local Config = {
+    ESP = { Airbox = true, ArenaBOX = true, ArenaRogueBOX = true, Players = true },
+    AutoFarm = { Airbox = true, ArenaBOX = true, ArenaRogueBOX = true, UsePrompt = true },
+    BlackScreen = false,
+    FPSCap = 60,
+    LowGraphics = false
+}
+
+-- FPS Cap, если возможно
+pcall(function()
+    if RunService.SetFramerateCap then
+        RunService:SetFramerateCap(Config.FPSCap)
+    end
+end)
+
+-- Создание GUI
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "ESP_Farm_GUI"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = PlayerGui
+
+-- Чёрный экран (оверлей)
+local blackFrame = Instance.new("Frame")
+blackFrame.Name = "BlackOverlay"
+blackFrame.BackgroundColor3 = Color3.new(0, 0, 0)
+blackFrame.BackgroundTransparency = 0
+blackFrame.Size = UDim2.new(1, 0, 1, 0)
+blackFrame.Parent = screenGui
+blackFrame.Visible = false
+
+-- Основной фрейм интерфейса (draggable)
+local mainFrame = Instance.new("Frame")
+mainFrame.Name = "MainFrame"
+mainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+mainFrame.BorderSizePixel = 0
+mainFrame.Size = UDim2.new(0, 350, 0, 400)
+mainFrame.Position = UDim2.new(0, 50, 0, 50)
+mainFrame.Parent = screenGui
+mainFrame.Active = true
+mainFrame.Draggable = true
+local uiCornerMain = Instance.new("UICorner")
+uiCornerMain.CornerRadius = UDim.new(0, 5)
+uiCornerMain.Parent = mainFrame
+
+-- TitleBar
+local titleBar = Instance.new("Frame")
+titleBar.Name = "TitleBar"
+titleBar.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+titleBar.BorderSizePixel = 0
+titleBar.Size = UDim2.new(1, 0, 0, 30)
+titleBar.Parent = mainFrame
+
+local titleLabel = Instance.new("TextLabel")
+titleLabel.Name = "TitleLabel"
+titleLabel.Text = "Menu ESP и AutoFarm"
+titleLabel.Font = Enum.Font.SourceSansBold
+titleLabel.TextSize = 18
+titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+titleLabel.BackgroundTransparency = 1
+titleLabel.Size = UDim2.new(1, -60, 1, 0)
+titleLabel.Position = UDim2.new(0, 5, 0, 0)
+titleLabel.Parent = titleBar
+
+local toggleButton = Instance.new("TextButton")
+toggleButton.Name = "ToggleButton"
+toggleButton.Text = "🔽"
+toggleButton.Font = Enum.Font.SourceSansBold
+toggleButton.TextSize = 18
+toggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+toggleButton.BackgroundTransparency = 1
+toggleButton.Size = UDim2.new(0, 30, 0, 30)
+toggleButton.Position = UDim2.new(1, -65, 0, 0)
+toggleButton.Parent = titleBar
+
+local closeButton = Instance.new("TextButton")
+closeButton.Name = "CloseButton"
+closeButton.Text = "✕"
+closeButton.Font = Enum.Font.SourceSansBold
+closeButton.TextSize = 18
+closeButton.TextColor3 = Color3.fromRGB(255, 100, 100)
+closeButton.BackgroundTransparency = 1
+closeButton.Size = UDim2.new(0, 30, 0, 30)
+closeButton.Position = UDim2.new(1, -35, 0, 0)
+closeButton.Parent = titleBar
+
+-- Скролл-контейнер для контента
+local scrollFrame = Instance.new("ScrollingFrame")
+scrollFrame.Name = "Content"
+scrollFrame.Active = true
+scrollFrame.BackgroundTransparency = 1
+scrollFrame.Size = UDim2.new(1, 0, 1, -50)
+scrollFrame.Position = UDim2.new(0, 0, 0, 30)
+scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 800)
+scrollFrame.Parent = mainFrame
+
+local listLayout = Instance.new("UIListLayout")
+listLayout.Padding = UDim.new(0, 8)
+listLayout.Parent = scrollFrame
+listLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+-- Счётчики FPS, пинга и собранных объектов
+local statsFrame = Instance.new("Frame")
+statsFrame.Name = "StatsFrame"
+statsFrame.BackgroundTransparency = 1
+statsFrame.BorderSizePixel = 0
+statsFrame.Size = UDim2.new(1, 0, 0, 20)
+statsFrame.Position = UDim2.new(0, 0, 1, -20)
+statsFrame.Parent = mainFrame
+
+local collectedLabel = Instance.new("TextLabel", statsFrame)
+collectedLabel.Text = "Собрано: 0"
+collectedLabel.Font = Enum.Font.SourceSans
+collectedLabel.TextSize = 14
+collectedLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+collectedLabel.BackgroundTransparency = 1
+collectedLabel.Size = UDim2.new(0.28, 0, 1, 0)
+collectedLabel.Position = UDim2.new(0, 5, 0, 0)
+
+local resetButton = Instance.new("TextButton", statsFrame)
+resetButton.Text = "⟳"
+resetButton.Font = Enum.Font.SourceSansBold
+resetButton.TextSize = 16
+resetButton.TextColor3 = Color3.fromRGB(255,255,128)
+resetButton.BackgroundTransparency = 1
+resetButton.Size = UDim2.new(0, 22, 1, 0)
+resetButton.Position = UDim2.new(0.27, 0, 0, 0)
+
+local fpsLabel = Instance.new("TextLabel", statsFrame)
+fpsLabel.Text = "FPS: 0"
+fpsLabel.Font = Enum.Font.SourceSans
+fpsLabel.TextSize = 14
+fpsLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+fpsLabel.BackgroundTransparency = 1
+fpsLabel.Size = UDim2.new(0.34, 0, 1, 0)
+fpsLabel.Position = UDim2.new(0.31, 5, 0, 0)
+
+local pingLabel = Instance.new("TextLabel", statsFrame)
+pingLabel.Text = "Ping: 0 мс"
+pingLabel.Font = Enum.Font.SourceSans
+pingLabel.TextSize = 14
+pingLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+pingLabel.BackgroundTransparency = 1
+pingLabel.Size = UDim2.new(0.34, 0, 1, 0)
+pingLabel.Position = UDim2.new(0.65, 5, 0, 0)
+
+-- Функция создания секции с заголовком
+local function createSection(title)
+    local sectionLabel = Instance.new("TextLabel")
+    sectionLabel.Text = "  " .. title
+    sectionLabel.Font = Enum.Font.SourceSansBold
+    sectionLabel.TextSize = 16
+    sectionLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+    sectionLabel.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+    sectionLabel.Size = UDim2.new(1, -10, 0, 25)
+    sectionLabel.Parent = scrollFrame
+    local secCorner = Instance.new("UICorner", sectionLabel)
+    secCorner.CornerRadius = UDim.new(0, 5)
+    sectionLabel.TextXAlignment = Enum.TextXAlignment.Left
+    sectionLabel.LayoutOrder = 0
+    return sectionLabel
+end
+
+-- Функция создания переключателя (toggle)
+local function createToggle(name, defaultState, onToggle)
+    local container = Instance.new("Frame")
+    container.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    container.Size = UDim2.new(1, -10, 0, 30)
+    container.Parent = scrollFrame
+    local corner = Instance.new("UICorner", container)
+    corner.CornerRadius = UDim.new(0, 4)
+
+    local label = Instance.new("TextLabel", container)
+    label.Text = name
+    label.Font = Enum.Font.SourceSans
+    label.TextSize = 14
+    label.TextColor3 = Color3.fromRGB(220, 220, 220)
+    label.BackgroundTransparency = 1
+    label.Position = UDim2.new(0, 5, 0, 0)
+    label.Size = UDim2.new(0.6, 0, 1, 0)
+
+    local button = Instance.new("TextButton", container)
+    button.Size = UDim2.new(0, 40, 0, 20)
+    button.Position = UDim2.new(1, -45, 0.5, -10)
+    button.BackgroundColor3 = defaultState and Color3.fromRGB(0, 170, 0) or Color3.fromRGB(170, 0, 0)
+    button.BorderSizePixel = 0
+    button.Font = Enum.Font.SourceSansBold
+    button.TextColor3 = Color3.fromRGB(255, 255, 255)
+    button.Text = defaultState and "ON" or "OFF"
+    local buttonCorner = Instance.new("UICorner", button)
+    buttonCorner.CornerRadius = UDim.new(0, 4)
+
+    local state = defaultState
+    button.MouseButton1Click:Connect(function()
+        state = not state
+        button.BackgroundColor3 = state and Color3.fromRGB(0, 170, 0) or Color3.fromRGB(170, 0, 0)
+        button.Text = state and "ON" or "OFF"
+        onToggle(state)
+    end)
+    return button, function() return state end
+end
+
+-- ESP: создание/удаление подсветки
+local function highlightObject(obj, color)
+    if obj and obj:IsA("BasePart") then
+        if obj:FindFirstChild("ESP_Highlight") then return end
+        local h = Instance.new("Highlight")
+        h.Name = "ESP_Highlight"
+        h.FillColor = color
+        h.OutlineColor = color
+        h.FillTransparency = 0.5
+        h.OutlineTransparency = 0
+        h.Adornee = obj
+        h.Parent = obj
+    end
+end
+local function removeHighlight(obj)
+    if obj and obj:FindFirstChild("ESP_Highlight") then
+        obj.ESP_Highlight:Destroy()
+    end
+end
+
+-- ESP: Billboard над игроком
+local function createPlayerBillboard(character)
+    local head = character:FindFirstChild("Head")
+    if not head then return end
+    if head:FindFirstChild("ESP_Billboard") then return end
+    local billboard = Instance.new("BillboardGui")
+    billboard.Name = "ESP_Billboard"
+    billboard.Adornee = head
+    billboard.Size = UDim2.new(0, 6, 0, 6)
+    billboard.StudsOffset = Vector3.new(0, 2, 0)
+    billboard.AlwaysOnTop = true
+    billboard.LightInfluence = 0
+    billboard.Parent = head
+    local frame = Instance.new("Frame", billboard)
+    frame.Size = UDim2.new(1, 0, 1, 0)
+    frame.BackgroundColor3 = Color3.fromRGB(0, 170, 255)
+    frame.BackgroundTransparency = 0.6
+    frame.BorderSizePixel = 0
+    frame.ZIndex = 1
+    local corner = Instance.new("UICorner", frame)
+    corner.CornerRadius = UDim.new(0, 1)
+    local nameLabel = Instance.new("TextLabel", billboard)
+    nameLabel.Size = UDim2.new(1, 0, 1, 0)
+    nameLabel.BackgroundTransparency = 1
+    nameLabel.Text = character.Name
+    nameLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    nameLabel.Font = Enum.Font.SourceSansBold
+    nameLabel.TextScaled = true
+    nameLabel.ZIndex = 2
+end
+local function removePlayerBillboard(character)
+    local head = character:FindFirstChild("Head")
+    if head and head:FindFirstChild("ESP_Billboard") then
+        head.ESP_Billboard:Destroy()
+    end
+end
+
+-- Кэш объектов для ESP/AutoFarm
+local ESP_OBJECTS = {Airbox = {}, ArenaBOX = {}, ArenaRogueBOX = {}}
+local function addESPObject(obj)
+    if ESP_OBJECTS[obj.Name] then
+        table.insert(ESP_OBJECTS[obj.Name], obj)
+    end
+end
+local function removeESPObject(obj)
+    if ESP_OBJECTS[obj.Name] then
+        for i, o in ipairs(ESP_OBJECTS[obj.Name]) do
+            if o == obj then table.remove(ESP_OBJECTS[obj.Name], i) break end
+        end
+    end
+end
+
+-- Обработка объектов ESP/AutoFarm при появлении/удалении
+local function processESPObject(obj)
+    if not obj:IsA("BasePart") then return end
+    if ESP_OBJECTS[obj.Name] then
+        addESPObject(obj)
+        -- Подсветка если включено
+        if Config.ESP[obj.Name] then
+            if obj.Name == "Airbox" then highlightObject(obj, Color3.fromRGB(200,0,200)) end
+            if obj.Name == "ArenaBOX" then highlightObject(obj, Color3.fromRGB(255,0,0)) end
+            if obj.Name == "ArenaRogueBOX" then highlightObject(obj, Color3.fromRGB(0,255,0)) end
+        end
+    end
+end
+local function cleanupESPObject(obj)
+    removeHighlight(obj)
+    removeESPObject(obj)
+end
+
+-- ESP: Игроки при появлении/удалении
+local function setupPlayerESP(plr)
+    local function onChar(char)
+        if Config.ESP.Players then createPlayerBillboard(char) end
+    end
+    if plr.Character then onChar(plr.Character) end
+    plr.CharacterAdded:Connect(function(char)
+        if Config.ESP.Players then createPlayerBillboard(char) end
+    end)
+    plr.CharacterRemoving:Connect(function(char)
+        removePlayerBillboard(char)
+    end)
+end
+
+for _,pl in ipairs(Players:GetPlayers()) do
+    setupPlayerESP(pl)
+end
+Players.PlayerAdded:Connect(setupPlayerESP)
+
+-- ESP: динамика объектов
+for _,obj in ipairs(Workspace:GetDescendants()) do
+    processESPObject(obj)
+end
+Workspace.DescendantAdded:Connect(processESPObject)
+Workspace.DescendantRemoving:Connect(cleanupESPObject)
+
+-- Раздел ESP
+createSection("ESP")
+local espAir, getAir = createToggle("ESP Airbox (фиолетовый)", true, function(state)
+    Config.ESP.Airbox = state
+    for _,obj in ipairs(ESP_OBJECTS["Airbox"]) do
+        if state then highlightObject(obj, Color3.fromRGB(200,0,200))
+        else removeHighlight(obj) end
+    end
+end)
+local espArena, getArena = createToggle("ESP ArenaBOX (красный)", true, function(state)
+    Config.ESP.ArenaBOX = state
+    for _,obj in ipairs(ESP_OBJECTS["ArenaBOX"]) do
+        if state then highlightObject(obj, Color3.fromRGB(255,0,0))
+        else removeHighlight(obj) end
+    end
+end)
+local espArenaRogue, getArenaRogue = createToggle("ESP ArenaRogueBOX (зеленый)", true, function(state)
+    Config.ESP.ArenaRogueBOX = state
+    for _,obj in ipairs(ESP_OBJECTS["ArenaRogueBOX"]) do
+        if state then highlightObject(obj, Color3.fromRGB(0,255,0))
+        else removeHighlight(obj) end
+    end
+end)
+local espPlayersToggle, getESPPlayers = createToggle("ESP Игроки (синий)", true, function(state)
+    Config.ESP.Players = state
+    for _,pl in ipairs(Players:GetPlayers()) do
+        if pl.Character then
+            if state then createPlayerBillboard(pl.Character)
+            else removePlayerBillboard(pl.Character) end
+        end
+    end
+end)
+
+-- Раздел AutoFarm
+createSection("AutoFarm")
+local farmAirbox, getFarmAirbox = createToggle("Farm Airbox", true, function(state)
+    Config.AutoFarm.Airbox = state
+end)
+local farmArenaBox, getFarmArenaBox = createToggle("Farm ArenaBOX", true, function(state)
+    Config.AutoFarm.ArenaBOX = state
+end)
+local farmArenaRogueBox, getFarmArenaRogueBox = createToggle("Farm ArenaRogueBOX", true, function(state)
+    Config.AutoFarm.ArenaRogueBOX = state
+end)
+local farmUsePrompt, getFarmUsePrompt = createToggle("Use ProximityPrompt (иначе E)", true, function(state)
+    Config.AutoFarm.UsePrompt = state
+end)
+
+-- Раздел Настроек (Чёрный экран, качество графики, FPSCap)
+createSection("Настройки")
+local toggleBlack, getToggleBlack = createToggle("Чёрный экран", false, function(state)
+    Config.BlackScreen = state
+    blackFrame.Visible = state
+end)
+local lowGraphToggle, getLowGraph = createToggle("Низкое качество графики", false, function(state)
+    Config.LowGraphics = state
+    if state then
+        pcall(function() gameSettings.SavedQualityLevel = Enum.SavedQualitySetting.Level01 end)
+    else
+        pcall(function() gameSettings.SavedQualityLevel = Enum.SavedQualitySetting.Level10 end)
+    end
+end)
+local fpsCapToggle, getFpsCap = createToggle("Ограничить FPS до 60", true, function(state)
+    Config.FPSCap = state and 60 or 240
+    pcall(function()
+        if RunService.SetFramerateCap then
+            RunService:SetFramerateCap(Config.FPSCap)
+        end
+    end)
+end)
+
+-- Drag'n'drop (альтернатива .Draggable, работает везде)
+do
+    local dragging, dragInput, startPos, startMousePos
+    local function update(input)
+        local delta = input.Position - startMousePos
+        mainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+    titleBar.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            startPos = mainFrame.Position
+            startMousePos = input.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+    titleBar.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            dragInput = input
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            update(input)
+        end
+    end)
+end
+
+-- Сворачивание/разворачивание окна
+local collapsed = false
+toggleButton.MouseButton1Click:Connect(function()
+    collapsed = not collapsed
+    scrollFrame.Visible = not collapsed
+    statsFrame.Visible = not collapsed
+    mainFrame.Size = collapsed and UDim2.new(0, 350, 0, 40) or UDim2.new(0, 350, 0, 400)
+    toggleButton.Text = collapsed and "▶" or "🔽"
+end)
+closeButton.MouseButton1Click:Connect(function()
+    screenGui:Destroy()
+end)
+
+-- Автофарм (оптимизировано)
+local collectedCount = 0
+resetButton.MouseButton1Click:Connect(function()
+    collectedCount = 0
+    collectedLabel.Text = "Собрано: 0"
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(1)
+        for name, enabled in pairs(Config.AutoFarm) do
+            if name ~= "UsePrompt" and enabled then
+                for _,obj in ipairs(ESP_OBJECTS[name] or {}) do
+                    local prompt = obj:FindFirstChildWhichIsA("ProximityPrompt")
+                    if prompt and prompt.Enabled and prompt.Parent and prompt.Parent:IsDescendantOf(Workspace) then
+                        if Config.AutoFarm.UsePrompt then
+                            prompt:InputHoldBegin()
+                            task.wait(prompt.HoldDuration or 1)
+                            prompt:InputHoldEnd()
+                            collectedCount = collectedCount + 1
+                        else
+                            -- Альтернативная логика (например, эмуляция "E"), если надо
+                            prompt:InputHoldBegin()
+                            task.wait(prompt.HoldDuration or 1)
+                            prompt:InputHoldEnd()
+                            collectedCount = collectedCount + 1
+                        end
+                    end
+                end
+            end
+        end
+    end
+end)
+
+-- FPS и Ping обновление
+local fpsSamples, fpsSum, fpsIdx = {}, 0, 1
+local lastTime = tick()
+RunService.RenderStepped:Connect(function()
+    -- FPS (среднее за 10 кадров)
+    local now = tick()
+    local dt = now - lastTime
+    lastTime = now
+    local curFPS = dt > 0 and 1/dt or 60
+    fpsSamples[fpsIdx] = curFPS
+    fpsSum = 0
+    for _,v in ipairs(fpsSamples) do fpsSum = fpsSum + v end
+    local avgFPS = math.floor(fpsSum / #fpsSamples + 0.5)
+    fpsIdx = (fpsIdx % 10) + 1
+    fpsLabel.Text = "FPS: " .. avgFPS
+
+    -- Ping
+    local ping = math.floor(LocalPlayer:GetNetworkPing() * 1000)
+    pingLabel.Text = "Ping: " .. ping .. " мс"
+    collectedLabel.Text = "Собрано: " .. collectedCount
+end)
